@@ -1,6 +1,6 @@
 {
-  "name": "openGym",
-  "short_name": "openGym",
+  "name": "Pump Life",
+  "short_name": "Pump Life",
   "description": "Personal gym & body weight tracker",
   "start_url": "./",
   "scope": "./",
