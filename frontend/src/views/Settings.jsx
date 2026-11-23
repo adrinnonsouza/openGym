@@ -1110,16 +1110,12 @@ export default function Settings({ page = null, find = null, via = null, entryKe
     </>,
 
     about: () => <>
-      {/* Updates. On Android the row is always there: it checks on demand and installs when a
-          release is newer (checksum verified, see onUpdateRowClick). On the web the app updates
-          with its server, so the row points at the APK for the phone instead. iOS and the Google
-          Play build are updated by their store. */}
-      <Section footer={MOBILE ? (selfUpdate ? t('Releases are checked on GitHub. The download is verified against its checksum before the installer opens.') : fdroid ? t('F-Droid installs the updates for this build.') : null) : t('The web app updates together with your server.')}>
+      {/* The web app updates with its server. Mobile release channels are configured separately. */}
+      <Section footer={MOBILE ? (fdroid ? t('F-Droid installs the updates for this build.') : null) : t('The web app updates together with your server.')}>
         {/* The sideloaded APK comes in three kinds that differ only in the animations built in
             (lib/apk-variant.js): which one this is, so nobody has to guess from the file size. */}
         <Row icon="info" iconTint="var(--grey)" title={t('Version')} value={'v' + __APP_VERSION__}
           subtitle={MOBILE && selfUpdate ? t('{0} APK, animations at {1} px', VARIANT_NAMES[APK_VARIANT], BUILTIN_PX) : undefined} />
-
       </Section>
       {/* The F-Droid build has no Wear OS link (it would need Google Play services, which F-Droid
           leaves out): said here rather than having a watch that silently never connects. */}
@@ -1155,7 +1151,7 @@ export default function Settings({ page = null, find = null, via = null, entryKe
         <a href="https://github.com/adrinnonsouza/openGym" target="_blank" rel="noopener">{t('Source code')}</a><br />
         {/* Attribution the media licence asks for word for word (agreement §8c), so it is not translated */}
         Exercise media © Aliaksandr Makatserchyk, <a href="https://gymvisual.com/" target="_blank" rel="noopener">Gym visual</a>, gymvisual.com.
-        Media licensed for use in openGym only; see <a href="https://github.com/DuarteSantos8/openGym/blob/main/NOTICE.md" target="_blank" rel="noopener">NOTICE.md</a>
+        Exercise media licensing: see <a href="https://github.com/adrinnonsouza/openGym/blob/main/NOTICE.md" target="_blank" rel="noopener">NOTICE.md</a>
       </div>
     </>,
 
