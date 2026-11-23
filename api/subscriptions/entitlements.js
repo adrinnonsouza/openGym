@@ -52,11 +52,11 @@ export function applyKiwifySale(billing, sale, expectedProductId, now = Date.now
     const previous = Date.parse(existing?.accessUntil) || 0
     billing.subscriptions[sale.subscriptionId] = {
       uid: owner, planId, accessUntil: new Date(Math.max(previous, until)).toISOString(),
-      status: 'active',
+      status: 'active', lastOrderId: sale.orderId,
     }
     billing.orders[sale.orderId] = sale.subscriptionId
     if (fresh) delete billing.intents[sale.checkoutIntent]
-  } else if (revoked && billing.orders[sale.orderId] === sale.subscriptionId && existing) {
+  } else if (revoked && billing.orders[sale.orderId] === sale.subscriptionId && existing?.lastOrderId === sale.orderId) {
     billing.subscriptions[sale.subscriptionId] = { ...existing, accessUntil: new Date(now).toISOString(), status: 'revoked' }
   } else if (sale.event === 'subscription_canceled' && existing) {
     billing.subscriptions[sale.subscriptionId] = { ...existing, status: 'canceled' }
