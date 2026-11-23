@@ -28,6 +28,9 @@ test('verified paid events grant access once, renewals extend it, refunds revoke
   const renewal = { ...paid(null, '2027-01-23T12:00:00Z'), key: 'order-2:subscription_renewed', event: 'subscription_renewed', orderId: 'order-2' }
   assert.equal(applyKiwifySale(billing, renewal, 'product-1', NOW), true)
   assert.equal(entitlementFor(billing, 'user-1', NOW).accessUntil, '2027-01-23T12:00:00.000Z')
+  const oldRefund = { ...renewal, key: 'order-1:order_refunded', orderId: 'order-1', event: 'order_refunded' }
+  assert.equal(applyKiwifySale(billing, oldRefund, 'product-1', NOW), false)
+  assert.equal(entitlementFor(billing, 'user-1', NOW).active, true)
   const refund = { ...renewal, key: 'order-2:order_refunded', event: 'order_refunded' }
   assert.equal(applyKiwifySale(billing, refund, 'product-1', NOW), true)
   assert.equal(entitlementFor(billing, 'user-1', NOW).active, false)
