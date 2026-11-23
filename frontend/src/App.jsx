@@ -53,6 +53,7 @@ import { useAnimPacksBoot } from './components/Animations.jsx'
 import { useNfcTagLinks } from './components/Nfc.jsx'
 import { useRoutineLinks } from './components/RoutineShare.jsx'
 import Login from './views/Login.jsx'
+import SubscriptionGate from './components/SubscriptionGate.jsx'
 import MobileOnboarding from './views/MobileOnboarding.jsx'
 import PermissionSteps from './views/PermissionSteps.jsx'
 import Home from './views/Home.jsx'
@@ -293,7 +294,7 @@ function Shell() {
   // The first-launch card has no tabs either: they changed the route behind it.
   const noTabs = inWorkout || loc.pathname === '/coach' || needsMobileOnboarding || permSteps
 
-  const authed = user || isGuest
+  const authed = user || (isGuest && !config?.billing)
   // The first setup is through (sign-in or "Use on this device", and the phone's permission
   // steps): "Want a 1-minute tour?" once, on a profile with nothing logged yet, or "Finish the
   // tour?" once after one was closed halfway (lib/tour.js). A moment after the screen settles,
@@ -331,6 +332,7 @@ function Shell() {
   )
 
   const view = l => (!authed ? <Login /> : needsMobileOnboarding ? <MobileOnboarding /> : permSteps ? <PermissionSteps /> : (
+    <SubscriptionGate enabled={!!config?.billing} userId={user?.id}>
     <Routes location={l}>
       <Route path="/home" element={<Home />} />
       {/* A module switched off (Settings → Modules, lib/modules.js) takes its screens with it: the
@@ -360,6 +362,7 @@ function Shell() {
       <Route path="/admin" element={user?.admin ? <Admin /> : <Navigate to="/home" replace />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
+    </SubscriptionGate>
   ))
   const showPreview = !!preview && preview !== loc.pathname && authed && !needsMobileOnboarding && !permSteps
 
