@@ -53,6 +53,7 @@ import { useAnimPacksBoot } from './components/Animations.jsx'
 import { useNfcTagLinks } from './components/Nfc.jsx'
 import { useRoutineLinks } from './components/RoutineShare.jsx'
 import Login from './views/Login.jsx'
+import SubscriptionGate from './components/SubscriptionGate.jsx'
 import MobileOnboarding from './views/MobileOnboarding.jsx'
 import PermissionSteps from './views/PermissionSteps.jsx'
 import Home from './views/Home.jsx'
@@ -127,6 +128,7 @@ function Shell() {
   const loc = useLocation()
   const navType = useNavigationType()
   const { S, user, ready } = useStore()
+  const [billingActive, setBillingActive] = useState(false)
   // iOS: whether timer sounds get past the ring/silent switch (Settings → Sounds). Page-level,
   // so it is applied here on load and on change rather than at each beep.
   useEffect(() => { setPlayOnSilent(!!S.soundOnSilent) }, [S.soundOnSilent])
@@ -291,9 +293,9 @@ function Shell() {
   }, [inWorkout])
   // The chat owns the bottom of the screen as well: its composer sits where the tabs would be.
   // The first-launch card has no tabs either: they changed the route behind it.
-  const noTabs = inWorkout || loc.pathname === '/coach' || needsMobileOnboarding || permSteps
+  const noTabs = inWorkout || loc.pathname === '/coach' || needsMobileOnboarding || permSteps || (config?.billing && !billingActive)
 
-  const authed = user || isGuest
+  const authed = user || (isGuest && !config?.billing)
   // The first setup is through (sign-in or "Use on this device", and the phone's permission
   // steps): "Want a 1-minute tour?" once, on a profile with nothing logged yet, or "Finish the
   // tour?" once after one was closed halfway (lib/tour.js). A moment after the screen settles,
@@ -331,6 +333,7 @@ function Shell() {
   )
 
   const view = l => (!authed ? <Login /> : needsMobileOnboarding ? <MobileOnboarding /> : permSteps ? <PermissionSteps /> : (
+    <SubscriptionGate enabled={!!config?.billing} userId={user?.id} onAccessChange={setBillingActive}>
     <Routes location={l}>
       <Route path="/home" element={<Home />} />
       {/* A module switched off (Settings → Modules, lib/modules.js) takes its screens with it: the
@@ -360,8 +363,9 @@ function Shell() {
       <Route path="/admin" element={user?.admin ? <Admin /> : <Navigate to="/home" replace />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
+    </SubscriptionGate>
   ))
-  const showPreview = !!preview && preview !== loc.pathname && authed && !needsMobileOnboarding && !permSteps
+  const showPreview = !!preview && preview !== loc.pathname && authed && !needsMobileOnboarding && !permSteps && (!config?.billing || billingActive)
 
   return (
     <>
@@ -380,16 +384,16 @@ function Shell() {
       <SyncBanner />
       {!noTabs && <TabBar onStart={startFlow} />}
       {!noTabs && authed && <ScrollTopButton off={loc.pathname === '/workout'} path={loc.pathname} />}
-      <RestTimer />
-      <Modals />
+      {(!config?.billing || billingActive) && <RestTimer />}
+      {(!config?.billing || billingActive) && <Modals />}
       <Toast />
-      <TimerFlash />
-      {tour && authed && <Suspense fallback={null}><Tour /></Suspense>}
+      {(!config?.billing || billingActive) && <TimerFlash />}
+      {tour && authed && (!config?.billing || billingActive) && <Suspense fallback={null}><Tour /></Suspense>}
       {/* Seasonal decoration (lib/seasonal.js): nothing, and nothing loaded, out of season. Never
           over a running workout or the first-launch screens. */}
-      {authed && !needsMobileOnboarding && !permSteps && <SeasonalLayer hidden={inWorkout || loc.pathname === '/workout'} />}
+      {authed && (!config?.billing || billingActive) && !needsMobileOnboarding && !permSteps && <SeasonalLayer hidden={inWorkout || loc.pathname === '/workout'} />}
       {/* Your year in openGym (components/WrappedEntry.jsx): nothing loaded until it is opened. */}
-      {authed && isOn(S, 'motivation') && <WrappedLayer ready={setupDone} />}
+      {authed && (!config?.billing || billingActive) && isOn(S, 'motivation') && <WrappedLayer ready={setupDone} />}
     </>
   )
 }

@@ -42,13 +42,25 @@ import { ipv6Groups, guardedLookup, pushEndpointError, MAX_PUSH_ENDPOINT } from 
 import { createIntegrations } from './integrations/index.js';
 import { integrationRoutes } from './integrations/routes.js';
 import { excusedOn, nudgeFor, nudgeWindowOpen, toneOf } from './nudge.js';
+import { SUBSCRIPTION_PLANS, subscriptionPlan } from './subscriptions/plans.js';
+import { verifyKiwifySignature, parseKiwifySale } from './subscriptions/kiwify.js';
+import { newCheckoutIntent, checkoutUrl, entitlementFor, applyKiwifySale } from './subscriptions/entitlements.js';
 import { wrappedPushYear, wrappedSummary, wrappedPushOwed, wrappedPush } from './wrapped.js';
 
 const PORT = +(process.env.PORT || 3000);
 const DATA = process.env.DATA_DIR || '/data';
 const RP_ID = process.env.RP_ID || 'localhost';
 const ORIGIN = process.env.ORIGIN || 'http://localhost:8080';
-const RP_NAME = process.env.RP_NAME || 'openGym';
+const RP_NAME = process.env.RP_NAME || 'Pump Life';
+const BILLING_ON = /^(1|true|yes|on)$/i.test(process.env.PUMP_LIFE_BILLING || '');
+const KIWIFY_PRODUCT_ID = process.env.KIWIFY_PRODUCT_ID || '';
+const KIWIFY_WEBHOOK_TOKEN = process.env.KIWIFY_WEBHOOK_TOKEN || '';
+const KIWIFY_CHECKOUTS = {
+  monthly: process.env.KIWIFY_CHECKOUT_MONTHLY || '',
+  semiannual: process.env.KIWIFY_CHECKOUT_SEMIANNUAL || '',
+  annual: process.env.KIWIFY_CHECKOUT_ANNUAL || '',
+};
+const billingReady = () => !!(KIWIFY_PRODUCT_ID && KIWIFY_WEBHOOK_TOKEN && Object.values(KIWIFY_CHECKOUTS).every(Boolean));
 // Admin dashboard (issue): admins are matched by uid (or the admin flag FIRST_USER_ADMIN sets);
 // INVITE_ONLY gates new signups behind a code the admin generates. Off by default, so a fresh
 // self-hosted instance stays open.
@@ -158,6 +170,7 @@ db.creds = db.creds || [];
 db.subs = db.subs || [];
 db.invites = db.invites || [];
 db.deviceLinks = db.deviceLinks || [];   // unused one-time device links, hashed (device-link.js)
+db.billing ||= { intents: {}, subscriptions: {}, orders: {}, events: {} };
 const isAdmin = user => !!user && (user.admin === true || ADMIN_UIDS.includes(user.id));
 // One owner per instance, any number of admins. Admins run the place day to day (users, invites,
 // the Coach); the owner is the one admin the others cannot act on: only the owner appoints or
@@ -685,7 +698,7 @@ const clearCookie = COOKIE === LEGACY_COOKIE
 // any site sign a visitor into the attacker's account and collect what they log (login CSRF).
 // The watch relay's two routes for the watch are the same kind: the code in the body, or a watch
 // token in the Authorization header, which no browser attaches on its own.
-const CSRF_EXEMPT = new Set(['POST /api/pair/redeem', 'POST /api/watch/redeem', 'POST /api/watch/box']);
+const CSRF_EXEMPT = new Set(['POST /api/pair/redeem', 'POST /api/watch/redeem', 'POST /api/watch/box', 'POST /api/billing/webhook']);
 // The routes that answer to the credential in the body and never to a Bearer. No Bearer is the
 // credential that acts there, so none buys the shortcut below: any valid token would do, the
 // attacker's own included.
@@ -813,6 +826,17 @@ function json(res, code, obj, extraHeaders) {
 // like a crash. Anything else that escapes a handler is still a real 500 and still logged.
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
+}
+async function readRawBillingBody(req) {
+  if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || '')) throw new HttpError(415, 'JSON required');
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 256 * 1024) throw new HttpError(413, 'body too large');
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -2104,7 +2128,8 @@ const routes = {
     // were not signed in when you asked", and would re-ask on every sign-in on every instance
     // that has no Coach. The key's absence is that answer.
     json(res, 200, {
-      invite_only: INVITE_ONLY, allow_guest: ALLOW_GUEST,
+      invite_only: INVITE_ONLY, allow_guest: BILLING_ON ? false : ALLOW_GUEST,
+      ...(BILLING_ON ? { billing: true } : {}),
       // Only when on, so an instance without passwords answers exactly as it did before (#118).
       ...(PASSWORD_LOGIN ? { password_login: true } : {}),
       // Public: the sign-in screen is the first thing that reads it.
@@ -2126,6 +2151,39 @@ const routes = {
   // current session version into it, so "sign out everywhere" ends a renewed token exactly as it
   // ended the old one — and a revoked token never gets this far. A browser's cookie is left
   // alone: signing in renews it, as before.
+  'GET /api/billing/status': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    json(res, 200, { enabled: BILLING_ON, ready: billingReady(),
+      active: !BILLING_ON || isAdmin(user) || entitlementFor(db.billing, user.id).active,
+      accessUntil: entitlementFor(db.billing, user.id).accessUntil,
+      plans: Object.values(SUBSCRIPTION_PLANS) });
+  },
+  'POST /api/billing/checkout': async (req, res) => {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!BILLING_ON || !billingReady()) return json(res, 503, { error: 'checkout unavailable' });
+    const body = await readBody(req);
+    const plan = subscriptionPlan(body.plan);
+    if (!plan) return json(res, 400, { error: 'invalid plan' });
+    const intent = newCheckoutIntent(db.billing, user.id, plan.id);
+    const url = checkoutUrl(KIWIFY_CHECKOUTS[plan.id], intent);
+    saveDb();
+    json(res, 200, { url });
+  },
+  'POST /api/billing/webhook': async (req, res) => {
+    if (!BILLING_ON || !KIWIFY_WEBHOOK_TOKEN || !KIWIFY_PRODUCT_ID) return json(res, 503, { error: 'billing unavailable' });
+    const raw = await readRawBillingBody(req);
+    const signature = new URL(req.url, 'http://x').searchParams.get('signature');
+    if (!verifyKiwifySignature(raw, signature, KIWIFY_WEBHOOK_TOKEN)) return json(res, 401, { error: 'invalid signature' });
+    let sale;
+    try { sale = parseKiwifySale(JSON.parse(raw.toString('utf8'))); }
+    catch { return json(res, 400, { error: 'invalid JSON' }); }
+    if (!sale) return json(res, 400, { error: 'invalid event' });
+    if (applyKiwifySale(db.billing, sale, KIWIFY_PRODUCT_ID)) saveDb();
+    json(res, 200, { ok: true });
+  },
+
   'GET /api/me': async (req, res) => {
     const s = sessionOf(req);
     if (!s) return json(res, 401, { error: 'not signed in' });
@@ -3072,6 +3130,14 @@ const server = http.createServer(async (req, res) => {
   if (mm) { key = req.method + ' /api/media/{hash}'; req.mediaHash = mm[1]; }
   const handler = routes[key];
   if (!handler) return json(res, 404, { error: 'not found' });
+  // Keep account, sign-in and billing routes available while an account is unpaid.
+  const billingPublic = /^(?:GET|POST|DELETE) \/api\/(?:health|config|me|billing\/|login\/|register\/|logout|account\/|device-link\/|admin\/)/.test(key);
+  if (BILLING_ON && !billingPublic && !key.startsWith('POST /api/pair/redeem')) {
+    const user = readSession(req);
+    if (!user) return json(res, 401, { error: 'not signed in' });
+    if (!isAdmin(user) && !entitlementFor(db.billing, user.id).active)
+      return json(res, 402, { error: 'subscription required', code: 'subscription-required' });
+  }
   if (!csrfOk(req, key)) {
     // A Bearer that does not verify and no cookie beside it: nothing ambient is in play, the caller
     // is simply not signed in. That is the paired app once its token is revoked or expired, and it
