@@ -4,7 +4,7 @@ import { api } from '../lib/api.js'
 const money = cents => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const labels = { monthly: 'Mensal', semiannual: 'Semestral', annual: 'Anual' }
 
-export default function SubscriptionGate({ enabled, userId, children }) {
+export default function SubscriptionGate({ enabled, userId, onAccessChange, children }) {
   const [status, setStatus] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -12,7 +12,7 @@ export default function SubscriptionGate({ enabled, userId, children }) {
     if (!enabled || !userId) { setStatus(null); return }
     let live = true
     const refresh = () => api('/api/billing/status').then(value => {
-      if (live) { setStatus(value); setError('') }
+      if (live) { setStatus({ ...value, userId }); setError('') }
     }).catch(() => { if (live) setError('Não foi possível verificar sua assinatura. Tente novamente.') })
     refresh()
     const interval = setInterval(refresh, 30000)
@@ -20,8 +20,9 @@ export default function SubscriptionGate({ enabled, userId, children }) {
     return () => { live = false; clearInterval(interval); window.removeEventListener('focus', refresh) }
   }, [enabled, userId])
 
-  if (!enabled || !userId) return children
-  if (status?.active) return children
+  const active = !enabled || (status?.userId === userId && status?.active)
+  useEffect(() => { onAccessChange?.(!!active) }, [active, onAccessChange])
+  if (!enabled || !userId || active) return children
   const checkout = async plan => {
     setBusy(plan)
     setError('')
